@@ -264,6 +264,20 @@ class PoseDataCollector:
         self.pose_data_list.append(landmarks_array)
         self.timestamps.append(timestamp_ms)
     
+    @staticmethod
+    def mediapipe_to_robotics(coords: np.ndarray) -> np.ndarray:
+        """
+        Convert MediaPipe coordinates to robotics convention.
+        
+        MediaPipe:  X=left/right, Y=down/up, Z=forward/back
+        Robotics:   X=forward/back, Y=left/right, Z=up/down
+        """
+        result = np.zeros_like(coords)
+        result[..., 0] = -coords[..., 2]  # Robotics X = -MediaPipe Z
+        result[..., 1] = -coords[..., 0]  # Robotics Y = -MediaPipe X
+        result[..., 2] = -coords[..., 1]  # Robotics Z = -MediaPipe Y
+        return result
+    
     def save(self) -> bool:
         """Save collected data to files"""
         if not self.pose_data_list:
@@ -275,8 +289,12 @@ class PoseDataCollector:
         pose_array = np.array(self.pose_data_list)
         timestamps_array = np.array(self.timestamps)
         
+        # Convert to robotics convention
+        pose_array_robotics = self.mediapipe_to_robotics(pose_array)
+        
         # Save files
-        self._save_pose_data(pose_array)
+        self._save_pose_data(pose_array, 'pose_3d_mediapipe.npy', 'MediaPipe')
+        self._save_pose_data(pose_array_robotics, 'pose_3d_robotics.npy', 'Robotics')
         self._save_timestamps(timestamps_array)
         self._save_metadata(pose_array)
         
@@ -284,12 +302,12 @@ class PoseDataCollector:
         self._print_summary(pose_array)
         return True
     
-    def _save_pose_data(self, pose_array: np.ndarray):
+    def _save_pose_data(self, pose_array: np.ndarray, filename: str, convention: str):
         """Save pose coordinates"""
-        filename = os.path.join(self.session_dir, 'pose_3d_coordinates.npy')
-        np.save(filename, pose_array)
-        print(f"Saved pose data: pose_3d_coordinates.npy")
-        print(f"Shape: {pose_array.shape} (frames, landmarks, coordinates)")
+        filepath = os.path.join(self.session_dir, filename)
+        np.save(filepath, pose_array)
+        print(f"Saved {convention} pose data: {filename}")
+        print(f"  Shape: {pose_array.shape} (frames, landmarks, coordinates)")
     
     def _save_timestamps(self, timestamps_array: np.ndarray):
         """Save timestamps"""
@@ -297,34 +315,75 @@ class PoseDataCollector:
         np.save(filename, timestamps_array)
         print(f"Saved timestamps: timestamps.npy")
     
-    def _save_metadata(self, pose_array: np.ndarray):
-        """Save metadata file"""
+    def _save_metadata(self, pose_array: np.ndarray, pose_array_robotics: np.ndarray):
+        """Save metadata file with coordinate system documentation"""
         filename = os.path.join(self.session_dir, 'metadata.txt')
+        
+        # Compute verification stats
+        hip_center_mp = (pose_array[:, 23, :] + pose_array[:, 24, :]) / 2
+        hip_center_rob = (pose_array_robotics[:, 23, :] + pose_array_robotics[:, 24, :]) / 2
+        nose_rob = pose_array_robotics[:, 0, :]
         
         with open(filename, 'w') as f:
             f.write(f"Pose Data Metadata\n")
-            f.write(f"{'='*60}\n")
+            f.write(f"{'='*60}\n\n")
+            
             f.write(f"Session: {self.session_timestamp}\n")
             f.write(f"Recording date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Total frames: {len(self.pose_data_list)}\n")
-            f.write(f"Array shape: {pose_array.shape}\n")
-            f.write(f"Coordinates: 3D world coordinates in meters\n")
-            f.write(f"Reference: Hip center (midpoint of landmarks 23 and 24)\n")
-            f.write(f"\nFiles in this session:\n")
-            f.write(f"  - pose_3d_coordinates.npy: 3D pose data\n")
-            f.write(f"  - timestamps.npy: Frame timestamps in milliseconds\n")
-            f.write(f"  - metadata.txt: This file\n")
-            f.write(f"\nLandmark indices:\n")
+            f.write(f"Array shape: {pose_array.shape}\n\n")
+            
+            f.write(f"{'='*60}\n")
+            f.write(f"FILES\n")
+            f.write(f"{'='*60}\n")
+            f.write(f"  pose_3d_mediapipe.npy : Raw MediaPipe coordinates\n")
+            f.write(f"  pose_3d_robotics.npy  : Converted to robotics convention (USE THIS)\n")
+            f.write(f"  timestamps.npy        : Frame timestamps in milliseconds\n")
+            f.write(f"  metadata.txt          : This file\n\n")
+            
+            f.write(f"{'='*60}\n")
+            f.write(f"COORDINATE SYSTEMS\n")
+            f.write(f"{'='*60}\n\n")
+            
+            f.write(f"MediaPipe Convention (pose_3d_mediapipe.npy):\n")
+            f.write(f"  +X = Right (camera's right, person's left)\n")
+            f.write(f"  +Y = Down (toward feet)\n")
+            f.write(f"  +Z = Away from camera\n")
+            f.write(f"  Origin = Hip center (re-centered every frame)\n\n")
+            
+            f.write(f"Robotics Convention (pose_3d_robotics.npy):\n")
+            f.write(f"  +X = Forward (toward camera)\n")
+            f.write(f"  +Y = Left (person's left)\n")
+            f.write(f"  +Z = Up (toward head)\n")
+            f.write(f"  Origin = Hip center (re-centered every frame)\n")
+            f.write(f"  Standard = ROS REP-103 / URDF\n\n")
+            
+            f.write(f"{'='*60}\n")
+            f.write(f"VERIFICATION (Frame 0)\n")
+            f.write(f"{'='*60}\n")
+            f.write(f"  Hip center (robotics): [{hip_center_rob[0, 0]:.4f}, {hip_center_rob[0, 1]:.4f}, {hip_center_rob[0, 2]:.4f}]\n")
+            f.write(f"  Nose (robotics):       [{nose_rob[0, 0]:.4f}, {nose_rob[0, 1]:.4f}, {nose_rob[0, 2]:.4f}]\n")
+            f.write(f"  Nose Z > Hip Z?        {nose_rob[0, 2] > hip_center_rob[0, 2]} (should be True - nose is above hip)\n\n")
+            
+            f.write(f"{'='*60}\n")
+            f.write(f"LANDMARK INDICES\n")
+            f.write(f"{'='*60}\n")
             for i, name in enumerate(self.LANDMARK_NAMES):
                 f.write(f"  {i:2d}: {name}\n")
-            f.write(f"\nUsage example:\n")
-            f.write(f"  import numpy as np\n")
-            f.write(f"  data = np.load('{self.session_dir}/pose_3d_coordinates.npy')\n")
-            f.write(f"  timestamps = np.load('{self.session_dir}/timestamps.npy')\n")
-            f.write(f"  # Access frame 0, landmark 0 (NOSE), x-coordinate:\n")
-            f.write(f"  nose_x = data[0, 0, 0]\n")
-            f.write(f"  # Access all frames, left wrist (landmark 15):\n")
-            f.write(f"  left_wrist = data[:, 15, :]\n")
+            
+            f.write(f"\n{'='*60}\n")
+            f.write(f"USAGE EXAMPLE\n")
+            f.write(f"{'='*60}\n")
+            f.write(f"  import numpy as np\n\n")
+            f.write(f"  # Load robotics convention (recommended for RL)\n")
+            f.write(f"  data = np.load('pose_3d_robotics.npy')\n")
+            f.write(f"  timestamps = np.load('timestamps.npy')\n\n")
+            f.write(f"  # Shape: (frames, 33 landmarks, 3 coordinates)\n")
+            f.write(f"  print(data.shape)  # ({pose_array.shape[0]}, 33, 3)\n\n")
+            f.write(f"  # Access nose position in frame 0\n")
+            f.write(f"  nose = data[0, 0, :]  # [x, y, z] in meters\n\n")
+            f.write(f"  # Access all frames for left wrist\n")
+            f.write(f"  left_wrist = data[:, 15, :]  # (frames, 3)\n")
         
         print(f"Saved metadata: metadata.txt")
     
