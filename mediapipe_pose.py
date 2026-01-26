@@ -23,7 +23,7 @@ class PoseDetector:
         Initialize the pose landmarker
         
         Args:
-            running_mode: 'LIVE_STREAM' for webcam, 'VIDEO' for video files
+            running_mode: 'LIVE_STREAM' for webcam, 'VIDEO' for video files, 'IMAGE' for single images
         """
         if not os.path.exists(self.model_path):
             print(f"Error: Model file '{self.model_path}' not found!")
@@ -52,6 +52,15 @@ class PoseDetector:
                 min_pose_presence_confidence=0.5,
                 min_tracking_confidence=0.5
             )
+        elif running_mode == 'IMAGE':
+            mode = VisionRunningMode.IMAGE
+            options = PoseLandmarkerOptions(
+                base_options=BaseOptions(model_asset_path=self.model_path),
+                running_mode=mode,
+                num_poses=1,
+                min_pose_detection_confidence=0.5,
+                min_pose_presence_confidence=0.5
+            )
         else:  # VIDEO mode
             mode = VisionRunningMode.VIDEO
             options = PoseLandmarkerOptions(
@@ -67,7 +76,7 @@ class PoseDetector:
         self.running_mode = running_mode
         return True
     
-    def detect(self, frame: np.ndarray, timestamp_ms: int):
+    def detect(self, frame: np.ndarray, timestamp_ms: int = 0):
         """Process a frame and return detection results"""
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
@@ -75,6 +84,8 @@ class PoseDetector:
         if self.running_mode == 'LIVE_STREAM':
             self.landmarker.detect_async(mp_image, timestamp_ms)
             return latest_result
+        elif self.running_mode == 'IMAGE':
+            return self.landmarker.detect(mp_image)
         else:  # VIDEO mode
             return self.landmarker.detect_for_video(mp_image, timestamp_ms)
     
